@@ -7,7 +7,7 @@ using namespace std;
 int main(int argc, char* argv[])
 {
   initComms();
-  connectNewPlayer();
-  closeComms();
+  //connectNewPlayer();
+  //closeComms();
   return 0;
 }

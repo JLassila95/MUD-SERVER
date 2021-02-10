@@ -1,10 +1,18 @@
-#include <vector>
-#include <cstdio>
-#include <cstdlib>
+#if defined(__unix__) || defined(__unix)
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#endif
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
+#include <vector>
+#include <cstdio>
+#include <cstdlib>
 
 #include "constants.h"
 
@@ -16,6 +24,20 @@ vector<int> conns;
 
 void initComms()
 {
+
+  #if defined(_WIN32)
+  WSADATA wsaData;
+  int result;
+  //Initialize Winsock
+  result = WSAStartup(MAKEWORD(2,2), &wsaData);
+  if(result != 0)
+  {
+    perror("WSAStartup failed");
+    exit(EXIT_FAILURE);
+  }
+  #endif
+
+  #if defined(__unix__) || defined(__unix)
   sockaddr_in addr_in;
 
   //Control socket creation
@@ -57,11 +79,13 @@ void initComms()
     perror("Listening on control socket failed");
     exit(EXIT_FAILURE);
   }
+  #endif
 
 }
 
 void closeComms()
 {
+  #if defined(__unix__) || defined(__unix)
   for(int sck : conns)
   {
     if(close(sck) < 0)
@@ -73,10 +97,12 @@ void closeComms()
   {
     perror("Failed to close control socket");
   }
+  #endif
 }
 
 void connectNewPlayer()
 {
+  #if defined(__unix__) || defined(__unix)
   int sck_in = accept(ctrlSock, nullptr, nullptr);
   if(sck_in < 0)
   {
@@ -84,4 +110,5 @@ void connectNewPlayer()
     return;
   }
   conns.push_back(sck_in);
+  #endif
 }
