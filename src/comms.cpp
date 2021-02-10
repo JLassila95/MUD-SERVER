@@ -1,85 +1,139 @@
-#if defined(__unix__) || defined(__unix)
+
+#if defined(_WIN32)
+#define _WIN32_WINNT 0x0501
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#elif defined(__unix__) || defined(__unix)
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#endif
-
-#if defined(_WIN32)
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <netdb.h>
 #endif
 
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include "constants.h"
 
 using namespace std;
 
+#if defined(_WIN32)
+SOCKET ctrlSock = INVALID_SOCKET;
+#elif defined(__unix__) || defined(__unix)
 int ctrlSock;
+#endif
 //Accepted connections
 vector<int> conns;
 
 void initComms()
 {
+  int iResult;
 
   #if defined(_WIN32)
   WSADATA wsaData;
-  int result;
   //Initialize Winsock
-  result = WSAStartup(MAKEWORD(2,2), &wsaData);
-  if(result != 0)
+  iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+  if(iResult != 0)
   {
     perror("WSAStartup failed");
     exit(EXIT_FAILURE);
   }
   #endif
 
-  #if defined(__unix__) || defined(__unix)
-  sockaddr_in addr_in;
+  struct addrinfo *result = NULL, hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = IPPROTO_TCP;
+  hints.ai_flags = AI_PASSIVE;
+  iResult = getaddrinfo(NULL, PORT, &hints, &result);
+  if(iResult != 0)
+  {
+    perror("getaddrinfo failed");
+    #if defined(_WIN32)
+    WSACleanup();
+    #endif
+    exit(EXIT_FAILURE);
+  }
 
   //Control socket creation
-  ctrlSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  ctrlSock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+  #if defined(_WIN32)
+  if(ctrlSock == INVALID_SOCKET)
+  #elif defined(__unix__) || defined(__unix)
   if(ctrlSock < 0)
+  #endif
   {
-    perror("Control socket creation failed");
+    perror("Failed to create control socket");
+    freeaddrinfo(result);
+    #if defined(_WIN32)
+    WSACleanup();
+    #endif
     exit(EXIT_FAILURE);
   }
 
+  #if defined(__unix__) || defined(__unix)
   //Make the socket nonblocking
-  if(fcntl(ctrlSock, F_SETFD, O_NONBLOCK, 1) < 0)
+  iResult = fcntl(ctrlSock, F_SETFD, O_NONBLOCK, 1);
+  if(iResult < 0)
   {
     perror("Error manipulating control socket");
+    freeaddrinfo(result);
+    close(ctrlSock);
     exit(EXIT_FAILURE);
   }
-
   //Make control socket linger
   linger args = { 1, LINGER_TIMEOUT };
-  if(setsockopt(ctrlSock, SOL_SOCKET, SO_LINGER, &args, sizeof(args)) < 0)
+  iResult = setsockopt(ctrlSock, SOL_SOCKET, SO_LINGER, &args, sizeof(args));
+  if(iResult < 0)
   {
     perror("Error setting control socket options");
-    exit(EXIT_FAILURE);
-  }
-
-  //Bind control socket
-  addr_in.sin_family = AF_INET;
-  addr_in.sin_addr.s_addr = INADDR_ANY;
-  addr_in.sin_port = htons( PORT );
-  if( bind(ctrlSock, (sockaddr*)&addr_in, sizeof(addr_in)) < 0 )
-  {
-    perror("Binding control socket failed");
-    exit(EXIT_FAILURE);
-  }
-
-  //Start listening for incoming connections
-  if( listen(ctrlSock, BACKLOG) < 0 )
-  {
-    perror("Listening on control socket failed");
+    freeaddrinfo(result);
+    close(ctrlSock);
     exit(EXIT_FAILURE);
   }
   #endif
+
+  //Bind control socket
+  iResult = bind(ctrlSock, result->ai_addr, static_cast<int>(result->ai_addrlen));
+  #if defined(_WIN32)
+  if(iResult == SOCKET_ERROR)
+  #elif defined(__unix__) || defined(__unix)
+  if(iResult < 0)
+  #endif
+  {
+    perror("Binding control socket failed");
+    freeaddrinfo(result);
+    #if defined(_WIN32)
+    closesocket(ctrlSock);
+    WSACleanup();
+    #elif defined(__unix__) || defined(__unix)
+    close(ctrlSock);
+    #endif
+    exit(EXIT_FAILURE);
+  }
+  freeaddrinfo(result);
+
+  //Start listening for incoming connections
+  iResult = listen(ctrlSock, SOMAXCONN);
+  #if defined(_WIN32)
+  if(iResult == SOCKET_ERROR)
+  #elif defined(__unix__) || defined(__unix)
+  if(iResult < 0)
+  #endif
+  {
+    perror("Listening on control socket failed");
+    #if defined(_WIN32)
+    closesocket(ctrlSock);
+    WSACleanup();
+    #elif defined(__unix__) || defined(__unix)
+    close(ctrlSock);
+    #endif
+    exit(EXIT_FAILURE);
+  }
 
 }
 

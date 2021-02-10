@@ -1,6 +1,6 @@
 ifeq ($(target-os), windows)
 CXX=x86_64-w64-mingw32-gcc
-LDLIBS=-lstdc++ -lwsock32
+LDLIBS=-lstdc++ -lws2_32
 OBJEXT=.win.o
 DEPEXT=.win.d
 else
@@ -50,7 +50,7 @@ run:
 	@$(EXEC)
 
 win-run:
-	wine $(EXEC).exe
+	@wine $(EXEC).exe
 
 clean:
 	rm -f $(BLD_DIR)/* $(DEP_DIR)/* $(EXE_DIR)/*
