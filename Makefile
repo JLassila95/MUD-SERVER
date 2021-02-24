@@ -10,7 +10,7 @@ OBJEXT=.o
 DEPEXT=.d
 endif
 
-CXXFLAGS=-g -Wall
+CXXFLAGS=-g -Wall -std=c++17
 LDFLAGS=
 INCLUDE=-I include
 
@@ -46,10 +46,10 @@ $(OBJECTS): $(BLD_DIR)/%$(OBJEXT): $(SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -c $< -o $@
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -MT $@ -MM $< > $(DEP_DIR)/$*$(DEPEXT)
 
-run:
+run: $(EXEC)
 	@$(EXEC)
 
-win-run:
+win-run: $(EXEC).exe
 	@wine $(EXEC).exe
 
 clean:

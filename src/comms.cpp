@@ -8,15 +8,20 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #endif
 
 #include <vector>
+#include <string>
+#include <memory>
+#include <iostream>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include "constants.h"
+#include "client.h"
 
 using namespace std;
 
@@ -26,10 +31,12 @@ SOCKET ctrlSock = INVALID_SOCKET;
 int ctrlSock;
 #endif
 //Accepted connections
-vector<int> conns;
+vector<Client*> clients;
 
 void initComms()
 {
+  printf("Initializing communications...");
+
   int iResult;
 
   #if defined(_WIN32)
@@ -38,7 +45,7 @@ void initComms()
   iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
   if(iResult != 0)
   {
-    perror("WSAStartup failed");
+    printf("WSAStartup failed: %d\n", iResult);
     exit(EXIT_FAILURE);
   }
   #endif
@@ -52,9 +59,11 @@ void initComms()
   iResult = getaddrinfo(NULL, PORT, &hints, &result);
   if(iResult != 0)
   {
-    perror("getaddrinfo failed");
     #if defined(_WIN32)
+    printf("getaddrinfo failed: %d\n", WSAGetLastError());
     WSACleanup();
+    #elif defined(__unix__) || defined(__unix)
+    perror("getaddrinfo failed");
     #endif
     exit(EXIT_FAILURE);
   }
@@ -67,35 +76,62 @@ void initComms()
   if(ctrlSock < 0)
   #endif
   {
-    perror("Failed to create control socket");
-    freeaddrinfo(result);
     #if defined(_WIN32)
+    printf("socket failed: %d\n", WSAGetLastError());
+    freeaddrinfo(result);
     WSACleanup();
+    #elif defined(__unix__) || defined(__unix)
+    perror("socket failed");
+    freeaddrinfo(result);
     #endif
     exit(EXIT_FAILURE);
   }
 
-  #if defined(__unix__) || defined(__unix)
+  
   //Make the socket nonblocking
+  #if defined(_WIN32)
+  u_long iMode = 1;
+  iResult = ioctlsocket(ctrlSock, FIONBIO, &iMode);
+  if(iResult == SOCKET_ERROR)
+  {
+    printf("ioctlsocket failed: %d\n", WSAGetLastError());
+    freeaddrinfo(result);
+    closesocket(ctrlSock);
+    WSACleanup();
+    exit(EXIT_FAILURE);
+  }
+  #elif defined(__unix__) || defined(__unix)
   iResult = fcntl(ctrlSock, F_SETFD, O_NONBLOCK, 1);
   if(iResult < 0)
   {
-    perror("Error manipulating control socket");
-    freeaddrinfo(result);
-    close(ctrlSock);
-    exit(EXIT_FAILURE);
-  }
-  //Make control socket linger
-  linger args = { 1, LINGER_TIMEOUT };
-  iResult = setsockopt(ctrlSock, SOL_SOCKET, SO_LINGER, &args, sizeof(args));
-  if(iResult < 0)
-  {
-    perror("Error setting control socket options");
+    perror("fcntl failed");
     freeaddrinfo(result);
     close(ctrlSock);
     exit(EXIT_FAILURE);
   }
   #endif
+
+  //Make control socket linger
+  linger args = { 1, LINGER_TIMEOUT };
+  iResult = setsockopt(ctrlSock, SOL_SOCKET, SO_LINGER, (char*)&args, sizeof(args));
+  #if defined(_WIN32)
+  if(iResult == SOCKET_ERROR)
+  #elif defined(__unix__) || defined(__unix)
+  if(iResult < 0)
+  #endif
+  {
+    #if defined(_WIN32)
+    printf("setsockopt failed: %d\n", WSAGetLastError());
+    freeaddrinfo(result);
+    closesocket(ctrlSock);
+    WSACleanup();
+    #elif defined(__unix__) || defined(__unix)
+    perror("setsockopt failed");
+    freeaddrinfo(result);
+    close(ctrlSock);
+    #endif
+    exit(EXIT_FAILURE);
+  }
 
   //Bind control socket
   iResult = bind(ctrlSock, result->ai_addr, static_cast<int>(result->ai_addrlen));
@@ -105,12 +141,14 @@ void initComms()
   if(iResult < 0)
   #endif
   {
-    perror("Binding control socket failed");
-    freeaddrinfo(result);
     #if defined(_WIN32)
+    printf("bind failed: %d\n", WSAGetLastError());
+    freeaddrinfo(result);
     closesocket(ctrlSock);
     WSACleanup();
     #elif defined(__unix__) || defined(__unix)
+    perror("bind failed");
+    freeaddrinfo(result);
     close(ctrlSock);
     #endif
     exit(EXIT_FAILURE);
@@ -125,44 +163,68 @@ void initComms()
   if(iResult < 0)
   #endif
   {
-    perror("Listening on control socket failed");
     #if defined(_WIN32)
+    printf("listen failed: %d\n", WSAGetLastError());
     closesocket(ctrlSock);
     WSACleanup();
     #elif defined(__unix__) || defined(__unix)
+    perror("listen failed");
     close(ctrlSock);
     #endif
     exit(EXIT_FAILURE);
   }
 
+  printf("READY\n");
 }
 
 void closeComms()
 {
-  #if defined(__unix__) || defined(__unix)
-  for(int sck : conns)
+  printf("Closing communications...");
+  for(Client* client : clients)
   {
-    if(close(sck) < 0)
-    {
-      perror("Failed to close client connection");
-    }
+    int sck = client->getSocket();
+    #if defined(_WIN32)
+    closesocket(sck);
+    #elif defined(__unix__) || defined(__unix)
+    close(sck);
+    #endif
+    delete(client);
   }
-  if(close(ctrlSock) < 0)
-  {
-    perror("Failed to close control socket");
-  }
+  #if defined(_WIN32)
+  closesocket(ctrlSock);
+  WSACleanup();
+  #elif defined(__unix__) || defined(__unix)
+  close(ctrlSock);
   #endif
+  printf("READY\n");
 }
 
-void connectNewPlayer()
+void processNewConnections()
 {
-  #if defined(__unix__) || defined(__unix)
-  int sck_in = accept(ctrlSock, nullptr, nullptr);
-  if(sck_in < 0)
+  sockaddr_in clientAddr;
+  socklen_t clientAddrLen = sizeof(clientAddr);
+  #if defined(_WIN32)
+  SOCKET clientSock;
+  #elif defined(__unix__) || defined(__unix)
+  int clientSock;
+  #endif
+  clientSock = accept(ctrlSock, (sockaddr*) &clientAddr, &clientAddrLen);
+  #if defined(_WIN32)
+  int err = WSAGetLastError();
+  if(clientSock == INVALID_SOCKET && err != WSAEWOULDBLOCK)
+  #elif defined(__unix__) || defined(__unix)
+  if(clientSock < 0)
+  #endif
   {
-    perror("Accepting new connection failed");
+    #if defined(_WIN32)
+    printf("accept failed: %d\n", err);
+    #elif defined(__unix__) || defined(__unix)
+    perror("accept failed");
+    #endif
     return;
   }
-  conns.push_back(sck_in);
-  #endif
+
+  Client* newClient = new Client(inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port), clientSock);
+  printf("New connection from address %s port %d\n", newClient->getAddress().data(), newClient->getPort());
+  clients.push_back(newClient);
 }

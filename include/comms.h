@@ -2,7 +2,7 @@
 #define COMMS_H
 
 void initComms();
-void connectNewPlayer();
+void processNewConnections();
 void closeComms();
 
 #endif /* end of include guard:  */
